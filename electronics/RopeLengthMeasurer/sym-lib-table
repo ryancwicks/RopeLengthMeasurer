@@ -1,0 +1,3 @@
+(sym_lib_table
+  (lib (name "RopeLengthMeasurerLibrary")(type "Legacy")(uri "${KIPRJMOD}/RopeLengthMeasurerLibrary.lib")(options "")(descr ""))
+)
