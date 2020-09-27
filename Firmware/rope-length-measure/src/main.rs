@@ -6,47 +6,44 @@
 //! the reference manual for an explanation. This is not an issue on the blue pill.
 
 #![deny(unsafe_code)]
-#![no_std]
 #![no_main]
+#![no_std]
 
-use panic_halt as _;
+// Halt on panic
+#[allow(unused_extern_crates)] // NOTE(allow) bug rust-lang/rust#53964
+extern crate panic_halt; // panic handler
 
-use nb::block;
-
+use cortex_m;
 use cortex_m_rt::entry;
-use embedded_hal::digital::v2::OutputPin;
-use stm32f1xx_hal::{pac, prelude::*, timer::Timer};
+use stm32f4xx_hal as hal;
+
+use crate::hal::{prelude::*, stm32};
 
 #[entry]
 fn main() -> ! {
-    // Get access to the core peripherals from the cortex-m crate
-    let cp = cortex_m::Peripherals::take().unwrap();
-    // Get access to the device specific peripherals from the peripheral access crate
-    let dp = pac::Peripherals::take().unwrap();
+    if let (Some(dp), Some(cp)) = (
+        stm32::Peripherals::take(),
+        cortex_m::peripheral::Peripherals::take(),
+    ) {
+        // Set up the LED.
+        let gpioc = dp.GPIOC.split();
+        let mut led = gpioc.pc13.into_push_pull_output();
 
-    // Take ownership over the raw flash and rcc devices and convert them into the corresponding
-    // HAL structs
-    let mut flash = dp.FLASH.constrain();
-    let mut rcc = dp.RCC.constrain();
+        // Set up the system clock. We want to run at 48MHz for this one.
+        let rcc = dp.RCC.constrain();
+        let clocks = rcc.cfgr.sysclk(48.mhz()).freeze();
 
-    // Freeze the configuration of all the clocks in the system and store the frozen frequencies in
-    // `clocks`
-    let clocks = rcc.cfgr.freeze(&mut flash.acr);
+        // Create a delay abstraction based on SysTick
+        let mut delay = hal::delay::Delay::new(cp.SYST, clocks);
 
-    // Acquire the GPIOC peripheral
-    let mut gpioc = dp.GPIOC.split(&mut rcc.apb2);
-
-    // Configure gpio C pin 13 as a push-pull output. The `crh` register is passed to the function
-    // in order to configure the port. For pins 0-7, crl should be passed instead.
-    let mut led = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
-    // Configure the syst timer to trigger an update every second
-    let mut timer = Timer::syst(cp.SYST, &clocks).start_count_down(1.hz());
-
-    // Wait for the timer to trigger an update and change the state of the LED
-    loop {
-        block!(timer.wait()).unwrap();
-        led.set_high().unwrap();
-        block!(timer.wait()).unwrap();
-        led.set_low().unwrap();
+        loop {
+            // On for 1s, off for 1s.
+            led.set_high().unwrap();
+            delay.delay_ms(1000_u32);
+            led.set_low().unwrap();
+            delay.delay_ms(1000_u32);
+        }
     }
+
+    loop {}
 }
