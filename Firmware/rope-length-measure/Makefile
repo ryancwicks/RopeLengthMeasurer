@@ -1,5 +1,5 @@
 build_hex:
-	cargo objcopy --bin rope-length-measure --release -- -O binary rope-length-measure.hex
+	cargo objcopy --bin rope-length-measure --release -- -O binary rope-length-measure
 
 upload:
-	stm32flash -w rope-length-measure.hex -v -g 0x0 /dev/ttyUSB0
+	st-flash --reset write rope-length-measure 0x8000000 

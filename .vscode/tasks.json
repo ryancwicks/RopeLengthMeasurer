@@ -19,6 +19,9 @@
             "group": {
                 "kind": "build",
                 "isDefault": true
+            },
+            "options": {
+                "cwd": "${workspaceFolder}/Firmware/rope-length-measure/"
             }
         },
         {
@@ -29,7 +32,10 @@
             "problemMatcher": [
                 "$rustc"
             ],
-            "group": "build"
+            "group": "build",
+            "options": {
+                "cwd": "${workspaceFolder}/Firmware/rope-length-measure/"
+            }
         },
         {
             "label": "cargo build --examples",
@@ -39,7 +45,10 @@
             "problemMatcher": [
                 "$rustc"
             ],
-            "group": "build"
+            "group": "build",
+            "options": {
+                "cwd": "${workspaceFolder}/Firmware/rope-length-measure/"
+            }
         },
         {
             "label": "cargo build --examples --release",
@@ -49,7 +58,10 @@
             "problemMatcher": [
                 "$rustc"
             ],
-            "group": "build"
+            "group": "build",
+            "options": {
+                "cwd": "${workspaceFolder}/Firmware/rope-length-measure/"
+            }
         },
         {
             "label": "cargo clean",
@@ -57,7 +69,10 @@
             "command": "cargo",
             "args": ["clean"],
             "problemMatcher": [],
-            "group": "build"
+            "group": "build",
+            "options": {
+                "cwd": "${workspaceFolder}/Firmware/rope-length-measure/"
+            }
         },
     ]
 }
