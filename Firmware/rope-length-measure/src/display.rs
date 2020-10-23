@@ -71,6 +71,8 @@ where BUS: embedded_hal::digital::v2::OutputPin, CTRL: embedded_hal::digital::v2
         self.delay_ms(1);
         self.send_command(0b0000_0111);
         self.delay_ms(1);
+        self.send_command(0x0c);
+        self.delay_ms(1);
 
         //self.send_command(0x38_u8); // Set to 8 bit, 2 line mode
         //in 2 line mode, DDRAM address in the 1st line is from "00H" to "27H", and DDRAM address in the 2nd line is from "40H" to "67H".

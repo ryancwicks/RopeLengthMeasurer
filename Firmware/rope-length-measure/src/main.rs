@@ -13,14 +13,29 @@
 #[allow(unused_extern_crates)] // NOTE(allow) bug rust-lang/rust#53964
 extern crate panic_halt; // panic handler
 
+use core::cell::{Cell, RefCell};
+
 use cortex_m;
 use cortex_m_rt::entry;
+use cortex_m::interrupt::{free, CriticalSection, Mutex};
 use stm32f4xx_hal as hal;
-use cortex_m::asm::delay;
+//use cortex_m::asm::delay;
+//use ufmt::uwrite;
+use core::fmt::Write;
+use heapless::String;
+use heapless::consts::*;
 
-use crate::hal::{prelude::*, stm32};
+use crate::hal::{prelude::*, 
+                interrupt,
+                gpio::{gpioa::PA11, gpioa::PA12, Edge, ExtiPin, Input, Floating},
+                stm32};
 
 mod display;
+
+static QUAD_A: Mutex<RefCell<Option<PA11<Input<Floating>>>>> = Mutex::new(RefCell::new(None));
+static QUAD_B: Mutex<RefCell<Option<PA12<Input<Floating>>>>> = Mutex::new(RefCell::new(None));
+static COUNT: Mutex<Cell<i32>> = Mutex::new(Cell::new(0));
+static OLD_STATE: Mutex<Cell<bool>> = Mutex::new(Cell::new(false));
 
 #[entry]
 fn main() -> ! {
@@ -33,13 +48,28 @@ fn main() -> ! {
         let clocks = rcc.cfgr.sysclk(48.mhz()).freeze();
         let _hal_delay = hal::delay::Delay::new(cp.SYST, clocks);
 
-        // Set up the LED.
-        let gpioc = dp.GPIOC.split();
-        let mut led = gpioc.pc13.into_push_pull_output();
-
-        //Set up the display pins
+        // Set up the ports
         let gpioa = dp.GPIOA.split();
         let gpiob = dp.GPIOB.split();
+        let gpioc = dp.GPIOC.split();
+
+        // Set up the LED.
+        let mut led = gpioc.pc13.into_push_pull_output();
+        led.set_high().unwrap();
+
+        // Set up the GPIO pins
+        let _but1 = gpiob.pb8.into_floating_input();
+        let _but2 = gpiob.pb9.into_floating_input();
+        let a = gpioa.pa11.into_floating_input();
+        let b = gpioa.pa12.into_floating_input();
+        let _x = gpioa.pa15.into_floating_input();
+
+        a.make_interrupt_source(&mut dp.SYSCFG);
+        a.enable_interrupt(&mut dp.EXTI);
+        a.trigger_on_edge (&mut dp.EXTI, Edge::RISING);
+        
+
+        //Set up the display pins
         let d0 = gpioa.pa0.into_push_pull_output().downgrade();
         let d1 = gpioa.pa1.into_push_pull_output().downgrade();
         let d2 = gpioa.pa2.into_push_pull_output().downgrade();
@@ -58,19 +88,53 @@ fn main() -> ! {
         display.initialize_display();
 
         display.set_cursor_position(0, 0).unwrap();
-        display.write_str("Hello, World!");
-        display.set_cursor_position(1, 1).unwrap();
-        display.write_str("newline");
+        display.write_str("Rope Measurer");
+        display.set_cursor_position(1, 0).unwrap();
+        display.write_str("0");
         
-
+        let count: i32 = free(|cs| COUNT.borrow(cs).get());
+        let mut last_count : i32 = count;
         loop {
+            count = free(|cs| COUNT.borrow(cs).get());
+            if last_count != count {
+                last_count = count;
+                let mut count_str = String::<U8>::new();
+                let _ = write!(count_str, "{}", count);
+                display.set_cursor_position(1, 0).unwrap();
+                for _ in 0..count_str.len()+1 {
+                    display.write_str(" ");
+                }
+                display.set_cursor_position(1, 0).unwrap();
+                display.write_str(count_str.as_str());
+            }
+
             // On for 1s, off for 1s.
-            led.set_high().unwrap();
-            delay( clocks.hclk().0 );
-            led.set_low().unwrap();
-            delay( clocks.hclk().0 );
+            //led.set_high().unwrap();
+            //delay( clocks.hclk().0 );
+            //led.set_low().unwrap();
+            //delay( clocks.hclk().0 );
         }
     }
 
     loop {}
+}
+
+#[interrupt]
+fn EXTI0(){
+    free(|cs| {
+        let mut a_state_ref = QUAD_A.borrow(cs).borrow_mut();
+        let mut b_state_ref = QUAD_B.borrow(cs).borrow_mut();
+        let count_cell = COUNT.borrow(cs);
+        let count = count_cell.get();
+        let mut old_a_state_cell = OLD_STATE.borrow(cs);
+        let old_a_state = old_a_state_cell.get();
+        if a_state != old_a_state {
+            old_a_state_cell.replace(a_state);
+            if b_state == a_state {
+                count_cell.replace ( count + 1 );
+            } else {
+                count_cell.replace ( count - 1 );
+            }
+        }    
+    });
 }
