@@ -18,24 +18,26 @@ use core::cell::{Cell, RefCell};
 use cortex_m;
 use cortex_m_rt::entry;
 use cortex_m::interrupt::{free, CriticalSection, Mutex};
-use stm32f4xx_hal as hal;
 //use cortex_m::asm::delay;
 //use ufmt::uwrite;
 use core::fmt::Write;
 use heapless::String;
 use heapless::consts::*;
+use embedded_hal::Direction as RotaryDirection;
 
+use stm32f4xx_hal as hal;
 use crate::hal::{prelude::*, 
                 interrupt,
                 gpio::{gpioa::PA11, gpioa::PA12, Edge, ExtiPin, Input, Floating},
-                stm32};
+                stm32,
+                qei::Qei};
 
 mod display;
 
-static QUAD_A: Mutex<RefCell<Option<PA11<Input<Floating>>>>> = Mutex::new(RefCell::new(None));
-static QUAD_B: Mutex<RefCell<Option<PA12<Input<Floating>>>>> = Mutex::new(RefCell::new(None));
-static COUNT: Mutex<Cell<i32>> = Mutex::new(Cell::new(0));
-static OLD_STATE: Mutex<Cell<bool>> = Mutex::new(Cell::new(false));
+//static QUAD_A: Mutex<RefCell<Option<PA11<Input<Floating>>>>> = Mutex::new(RefCell::new(None));
+//static QUAD_B: Mutex<RefCell<Option<PA12<Input<Floating>>>>> = Mutex::new(RefCell::new(None));
+//static COUNT: Mutex<Cell<i32>> = Mutex::new(Cell::new(0));
+//static OLD_STATE: Mutex<Cell<bool>> = Mutex::new(Cell::new(false));
 
 #[entry]
 fn main() -> ! {
@@ -46,7 +48,7 @@ fn main() -> ! {
         // Set up the system clock. We want to run at 48MHz for this one.
         let rcc = dp.RCC.constrain();
         let clocks = rcc.cfgr.sysclk(48.mhz()).freeze();
-        let _hal_delay = hal::delay::Delay::new(cp.SYST, clocks);
+        let mut hal_delay = hal::delay::Delay::new(cp.SYST, clocks);
 
         // Set up the ports
         let gpioa = dp.GPIOA.split();
@@ -58,15 +60,22 @@ fn main() -> ! {
         led.set_high().unwrap();
 
         // Set up the GPIO pins
+        //let _x = gpioa.pa15.into_floating_input();
         let _but1 = gpiob.pb8.into_floating_input();
         let _but2 = gpiob.pb9.into_floating_input();
-        let a = gpioa.pa11.into_floating_input();
-        let b = gpioa.pa12.into_floating_input();
-        let _x = gpioa.pa15.into_floating_input();
+        let rotary_encoder_pins = (
+            gpioa.pa15.into_alternate_af1(),
+            gpiob.pb3.into_alternate_af1()
+        );
+        
 
-        a.make_interrupt_source(&mut dp.SYSCFG);
-        a.enable_interrupt(&mut dp.EXTI);
-        a.trigger_on_edge (&mut dp.EXTI, Edge::RISING);
+        let rotary_encoder_timer = dp.TIM2;
+        let rotary_encoder = Qei::tim2(rotary_encoder_timer, rotary_encoder_pins);
+
+
+        //but1.make_interrupt_source(&mut dp.SYSCFG);
+        //but1.enable_interrupt(&mut dp.EXTI);
+        //but1.trigger_on_edge (&mut dp.EXTI, Edge::RISING);
         
 
         //Set up the display pins
@@ -92,14 +101,24 @@ fn main() -> ! {
         display.set_cursor_position(1, 0).unwrap();
         display.write_str("0");
         
-        let count: i32 = free(|cs| COUNT.borrow(cs).get());
-        let mut last_count : i32 = count;
+        let mut current_count = rotary_encoder.count();
         loop {
-            count = free(|cs| COUNT.borrow(cs).get());
-            if last_count != count {
-                last_count = count;
+            
+            let new_count = rotary_encoder.count();
+
+            if new_count != current_count {
+    
+                // Light up the LED when turning clockwise, turn it off
+                // when turning counter-clockwise.
+                match rotary_encoder.direction() {
+                    RotaryDirection::Upcounting => led.set_low().unwrap(),
+                    RotaryDirection::Downcounting => led.set_high().unwrap(),
+                }
+    
+                current_count = new_count;
+
                 let mut count_str = String::<U8>::new();
-                let _ = write!(count_str, "{}", count);
+                let _ = write!(count_str, "{}", current_count);
                 display.set_cursor_position(1, 0).unwrap();
                 for _ in 0..count_str.len()+1 {
                     display.write_str(" ");
@@ -107,12 +126,8 @@ fn main() -> ! {
                 display.set_cursor_position(1, 0).unwrap();
                 display.write_str(count_str.as_str());
             }
-
-            // On for 1s, off for 1s.
-            //led.set_high().unwrap();
-            //delay( clocks.hclk().0 );
-            //led.set_low().unwrap();
-            //delay( clocks.hclk().0 );
+    
+            hal_delay.delay_ms(10_u32);         
         }
     }
 
@@ -120,21 +135,8 @@ fn main() -> ! {
 }
 
 #[interrupt]
-fn EXTI0(){
+fn EXTI15_10(){
     free(|cs| {
-        let mut a_state_ref = QUAD_A.borrow(cs).borrow_mut();
-        let mut b_state_ref = QUAD_B.borrow(cs).borrow_mut();
-        let count_cell = COUNT.borrow(cs);
-        let count = count_cell.get();
-        let mut old_a_state_cell = OLD_STATE.borrow(cs);
-        let old_a_state = old_a_state_cell.get();
-        if a_state != old_a_state {
-            old_a_state_cell.replace(a_state);
-            if b_state == a_state {
-                count_cell.replace ( count + 1 );
-            } else {
-                count_cell.replace ( count - 1 );
-            }
-        }    
+        
     });
 }
