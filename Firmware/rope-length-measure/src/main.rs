@@ -1,11 +1,6 @@
 //! Blinks an LED
-//!
-//! This assumes that a LED is connected to pc13 as is the case on the blue pill board.
-//!
-//! Note: Without additional hardware, PC13 should not be used to drive an LED, see page 5.1.2 of
-//! the reference manual for an explanation. This is not an issue on the blue pill.
-
-#![deny(unsafe_code)]
+//! 
+//! Measures the length of a rope run over a quaderature encoder and displays the result on a HD44780 compatible LED display.
 #![no_main]
 #![no_std]
 
@@ -18,6 +13,7 @@ use core::cell::{Cell, RefCell};
 use cortex_m;
 use cortex_m_rt::entry;
 use cortex_m::interrupt::{free, CriticalSection, Mutex};
+use core::ops::DerefMut;
 //use cortex_m::asm::delay;
 //use ufmt::uwrite;
 use core::fmt::Write;
@@ -28,23 +24,27 @@ use embedded_hal::Direction as RotaryDirection;
 use stm32f4xx_hal as hal;
 use crate::hal::{prelude::*, 
                 interrupt,
-                gpio::{gpioa::PA11, gpioa::PA12, Edge, ExtiPin, Input, Floating},
+                gpio::{gpiob::PB8, Edge, ExtiPin, Input, Floating},
                 stm32,
                 qei::Qei};
 
 mod display;
+mod counted_length;
 
 //static QUAD_A: Mutex<RefCell<Option<PA11<Input<Floating>>>>> = Mutex::new(RefCell::new(None));
 //static QUAD_B: Mutex<RefCell<Option<PA12<Input<Floating>>>>> = Mutex::new(RefCell::new(None));
 //static COUNT: Mutex<Cell<i32>> = Mutex::new(Cell::new(0));
 //static OLD_STATE: Mutex<Cell<bool>> = Mutex::new(Cell::new(false));
+static RESET_COUNTER: Mutex<Cell<bool>> = Mutex::new(Cell::new(false));
+static BUT1: Mutex<RefCell<Option<PB8<Input<Floating>>>>> = Mutex::new(RefCell::new(None));
 
 #[entry]
 fn main() -> ! {
-    if let (Some(dp), Some(cp)) = (
+    if let (Some(mut dp), Some(cp)) = (
         stm32::Peripherals::take(),
         cortex_m::peripheral::Peripherals::take(),
     ) {
+        dp.RCC.apb2enr.write(|w| w.syscfgen().enabled());
         // Set up the system clock. We want to run at 48MHz for this one.
         let rcc = dp.RCC.constrain();
         let clocks = rcc.cfgr.sysclk(48.mhz()).freeze();
@@ -60,22 +60,36 @@ fn main() -> ! {
         led.set_high().unwrap();
 
         // Set up the GPIO pins
-        //let _x = gpioa.pa15.into_floating_input();
-        let _but1 = gpiob.pb8.into_floating_input();
-        let _but2 = gpiob.pb9.into_floating_input();
+        let mut a_pin = gpioa.pa15.into_push_pull_output();
+        a_pin.set_low().unwrap();
+        let mut b_pin = gpiob.pb3.into_push_pull_output();
+        b_pin.set_low().unwrap();
+        let mut but1 = gpiob.pb8.into_floating_input(); //mid button
+
+        let _but2 = gpiob.pb9.into_floating_input(); //up button
+        let _but3 = gpiob.pb7.into_floating_input(); //down button
         let rotary_encoder_pins = (
-            gpioa.pa15.into_alternate_af1(),
-            gpiob.pb3.into_alternate_af1()
+            a_pin.into_alternate_af1(),
+            b_pin.into_alternate_af1()
         );
         
 
         let rotary_encoder_timer = dp.TIM2;
         let rotary_encoder = Qei::tim2(rotary_encoder_timer, rotary_encoder_pins);
 
+        but1.make_interrupt_source(&mut dp.SYSCFG);
+        but1.enable_interrupt(&mut dp.EXTI);
+        but1.trigger_on_edge (&mut dp.EXTI, Edge::FALLING);
 
-        //but1.make_interrupt_source(&mut dp.SYSCFG);
-        //but1.enable_interrupt(&mut dp.EXTI);
-        //but1.trigger_on_edge (&mut dp.EXTI, Edge::RISING);
+        free(|cs| {
+            BUT1.borrow(cs).replace(Some(but1));
+        });
+
+        // Enable interrupts
+        stm32::NVIC::unpend(hal::stm32::Interrupt::EXTI9_5);
+        unsafe {
+            stm32::NVIC::unmask(hal::stm32::Interrupt::EXTI9_5);
+        };
         
 
         //Set up the display pins
@@ -97,28 +111,42 @@ fn main() -> ! {
         display.initialize_display();
 
         display.set_cursor_position(0, 0).unwrap();
-        display.write_str("Rope Measurer");
+        display.write_str("Length:");
         display.set_cursor_position(1, 0).unwrap();
-        display.write_str("0");
+        display.write_str("0 m");
         
         let mut current_count = rotary_encoder.count();
+        let mut length = counted_length::CountedLength::new(0.01, 2048);
         loop {
+            
+            let reset_count = free(|cs| RESET_COUNTER.borrow(cs).get());
             
             let new_count = rotary_encoder.count();
 
-            if new_count != current_count {
-    
-                // Light up the LED when turning clockwise, turn it off
-                // when turning counter-clockwise.
-                match rotary_encoder.direction() {
-                    RotaryDirection::Upcounting => led.set_low().unwrap(),
-                    RotaryDirection::Downcounting => led.set_high().unwrap(),
-                }
-    
-                current_count = new_count;
+            if (new_count != current_count) || (reset_count) {
 
-                let mut count_str = String::<U8>::new();
-                let _ = write!(count_str, "{}", current_count);
+                if reset_count {
+                    free(|cs| RESET_COUNTER.borrow(cs).replace(false));
+                    length.reset();
+                } else {
+                    let diff = new_count as i32 - current_count as i32;  
+                    current_count = new_count;  
+                    length.update_with_difference(diff);
+
+                    // Light up the LED when turning clockwise, turn it off
+                    // when turning counter-clockwise.
+                    match rotary_encoder.direction() {
+                        RotaryDirection::Upcounting => {
+                            led.set_low().unwrap();
+                        },
+                        RotaryDirection::Downcounting => {
+                            led.set_high().unwrap();
+                        },
+                    }
+                }
+
+                let mut count_str = String::<U15>::new();
+                let _ = write!(count_str, "{:.3} m", length.get_length());
                 display.set_cursor_position(1, 0).unwrap();
                 for _ in 0..count_str.len()+1 {
                     display.write_str(" ");
@@ -134,9 +162,16 @@ fn main() -> ! {
     loop {}
 }
 
+
 #[interrupt]
-fn EXTI15_10(){
+fn EXTI9_5(){
     free(|cs| {
-        
+        let mut btn_ref = BUT1.borrow(cs).borrow_mut();
+        if let Some(ref mut btn) = btn_ref.deref_mut() {
+            // We cheat and don't bother checking _which_ exact interrupt line fired - there's only
+            // ever going to be one in this example.
+            btn.clear_interrupt_pending_bit();
+            RESET_COUNTER.borrow(cs).replace(true);
+        }
     });
 }
